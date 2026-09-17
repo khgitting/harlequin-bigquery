@@ -163,6 +163,7 @@ class BigQueryConnection(HarlequinConnection):
 
             if dataset_id != current_dataset:
                 current_dataset = dataset_id
+                current_table = None
                 datasets[row.dataset_id] = CatalogItem(
                     qualified_identifier=f"`{self.project}`.`{dataset_id}`",
                     query_name=f"`{dataset_id}`",
