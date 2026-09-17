@@ -237,3 +237,39 @@ def test_get_catalog_resets_current_table_between_datasets():
     assert dataset_b.children[0].label == "shared_table"
     assert len(dataset_b.children[0].children) == 1
     assert dataset_b.children[0].children[0].label == "column_b"
+
+
+def test_get_catalog_handles_range_column_type():
+    connection = BigQueryConnection.__new__(BigQueryConnection)
+    connection.location = "US"
+
+    connection.client = MagicMock()
+    connection.client.project = "test-project"
+
+    rows = [
+        MagicMock(
+            dataset_id="dataset_a",
+            table_id="table_a",
+            table_type="BASE TABLE",
+            column_name="range_column",
+            column_type="RANGE",
+        ),
+    ]
+
+    cursor = MagicMock()
+    cursor.cursor.fetchall.return_value = rows
+    connection.execute = MagicMock(return_value=cursor)
+
+    catalog = connection.get_catalog()
+
+    assert len(catalog.items) == 1
+
+    dataset = catalog.items[0]
+    assert len(dataset.children) == 1
+
+    table = dataset.children[0]
+    assert len(table.children) == 1
+
+    column = table.children[0]
+    assert column.label == "range_column"
+    assert column.type_label == "rng"
