@@ -1,5 +1,6 @@
 import sys
 from typing import Any, Generator
+from unittest.mock import MagicMock
 
 import pytest
 from google.cloud.bigquery.client import Client
@@ -189,3 +190,50 @@ def test_delete_from_temp_table(connection: BigQueryConnection):
     cursor = connection.execute(query)
     data = cursor.fetchall()
     assert not data
+
+
+def test_get_catalog_resets_current_table_between_datasets():
+    connection = BigQueryConnection.__new__(BigQueryConnection)
+    connection.location = "US"
+
+    connection.client = MagicMock()
+    connection.client.project = "test-project"
+
+    rows = [
+        MagicMock(
+            dataset_id="dataset_a",
+            table_id="shared_table",
+            table_type="BASE TABLE",
+            column_name="column_a",
+            column_type="STRING",
+        ),
+        MagicMock(
+            dataset_id="dataset_b",
+            table_id="shared_table",
+            table_type="BASE TABLE",
+            column_name="column_b",
+            column_type="STRING",
+        ),
+    ]
+
+    cursor = MagicMock()
+    cursor.cursor.fetchall.return_value = rows
+    connection.execute = MagicMock(return_value=cursor)
+
+    catalog = connection.get_catalog()
+
+    assert len(catalog.items) == 2
+
+    dataset_a = catalog.items[0]
+    assert dataset_a.label == "dataset_a"
+    assert len(dataset_a.children) == 1
+    assert dataset_a.children[0].label == "shared_table"
+    assert len(dataset_a.children[0].children) == 1
+    assert dataset_a.children[0].children[0].label == "column_a"
+
+    dataset_b = catalog.items[1]
+    assert dataset_b.label == "dataset_b"
+    assert len(dataset_b.children) == 1
+    assert dataset_b.children[0].label == "shared_table"
+    assert len(dataset_b.children[0].children) == 1
+    assert dataset_b.children[0].children[0].label == "column_b"
