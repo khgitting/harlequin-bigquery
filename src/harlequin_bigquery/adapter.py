@@ -40,6 +40,7 @@ COLUMN_TYPE_MAPPING = {
     StandardSqlTypeNames.JSON: "{j}",
     StandardSqlTypeNames.ARRAY: "[]",
     StandardSqlTypeNames.STRUCT: "{}",
+    StandardSqlTypeNames.RANGE: "rng",
 }
 
 
