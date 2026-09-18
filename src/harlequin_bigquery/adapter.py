@@ -106,10 +106,12 @@ class BigQueryConnection(HarlequinConnection):
         project: str | None = None,
         location: str | None = None,
         init_message: str = "",
+        catalog_projects: tuple[str, ...] = (),
         **_: Any,
     ) -> None:
         self.location = location or "US"
         self.init_message = init_message
+        self.catalog_projects = catalog_projects
         try:
             self.client = bigquery.Client(project=project, location=location)
             self.conn = bigquery.dbapi.Connection(self.client)
@@ -135,71 +137,102 @@ class BigQueryConnection(HarlequinConnection):
         return BigQueryCursor(cursor)
 
     def get_catalog(self) -> Catalog:
-        query = f"""
-            select
-                datasets.schema_name as dataset_id,
-                tables.table_name as table_id,
-                tables.table_type as table_type,
-                columns,column_name,
-                columns.data_type as column_type
-            from `{self.project}.region-{self.location}.INFORMATION_SCHEMA.SCHEMATA` datasets
-            left join `{self.project}.region-{self.location}.INFORMATION_SCHEMA.TABLES` tables
-            on datasets.catalog_name = tables.table_catalog
-            and datasets.schema_name = tables.table_schema
-            left join `{self.project}.region-{self.location}.INFORMATION_SCHEMA.COLUMNS` columns
-            using (table_catalog, table_schema, table_name)
-            order by dataset_id, table_id, column_name
-        """
-        cursor = self.execute(query)
-        results = cursor.cursor.fetchall()
-
-        current_dataset = current_table = None
-        datasets: dict[str, CatalogItem] = {}
-
-        # Iterate in sorted order by dataset, table, then column
-        for row in results:
-            dataset_id = row.dataset_id
-            table_id = row.table_id
-            column_name = row.column_name
-
-            if dataset_id != current_dataset:
-                current_dataset = dataset_id
-                current_table = None
-                datasets[row.dataset_id] = CatalogItem(
-                    qualified_identifier=f"`{self.project}`.`{dataset_id}`",
-                    query_name=f"`{dataset_id}`",
-                    label=dataset_id,
-                    type_label="ds",
-                    children=[],
-                )
-
-            if table_id and table_id != current_table:
-                current_table = table_id
-                table_catalog_item = CatalogItem(
-                    qualified_identifier=f"`{self.project}`.`{dataset_id}`.`{table_id}`",
-                    query_name=f"`{table_id}`",
-                    label=table_id,
-                    type_label=self.TABLE_TYPE_MAPPING[row.table_type],
-                    children=[],
-                )
-                datasets[dataset_id].children.append(table_catalog_item)
-
-            if column_name:
-                # remove anything in <> or () from the column_type
-                column_type_cleaned = re.sub(r"[<(].*[>)]", "", row.column_type)
-                column_type_label = COLUMN_TYPE_MAPPING[
-                    StandardSqlTypeNames(column_type_cleaned)
+        projects = list(
+            dict.fromkeys(
+                [
+                    self.client.project,
+                    *self.catalog_projects,
                 ]
-                column_catalog_item = CatalogItem(
-                    qualified_identifier=f"`{self.project}`.`{row.dataset_id}`.`{row.table_id}`.`{row.column_name}`",
-                    query_name=f"`{row.column_name}`",
-                    label=row.column_name,
-                    type_label=column_type_label,
-                )
-                # Relies on order being sorted
-                datasets[dataset_id].children[-1].children.append(column_catalog_item)
+            )
+        )
 
-        return Catalog(items=list(datasets.values()))
+        project_items = []
+
+        for project in projects:
+            query = f"""
+                select
+                    datasets.schema_name as dataset_id,
+                    tables.table_name as table_id,
+                    tables.table_type as table_type,
+                    columns,column_name,
+                    columns.data_type as column_type
+                from `{project}.region-{self.location}.INFORMATION_SCHEMA.SCHEMATA` datasets
+                left join `{project}.region-{self.location}.INFORMATION_SCHEMA.TABLES` tables
+                on datasets.catalog_name = tables.table_catalog
+                and datasets.schema_name = tables.table_schema
+                left join `{project}.region-{self.location}.INFORMATION_SCHEMA.COLUMNS` columns
+                using (table_catalog, table_schema, table_name)
+                order by dataset_id, table_id, column_name
+            """
+            cursor = self.execute(query)
+            results = cursor.cursor.fetchall()
+
+            project_item = CatalogItem(
+                qualified_identifier=f"`{project}`",
+                query_name=f"`{project}`",
+                label=project,
+                type_label="project",
+                children=[],
+            )
+
+            current_dataset = current_table = None
+            datasets: dict[str, CatalogItem] = {}
+
+            # Iterate in sorted order by dataset, table, then column
+            for row in results:
+                dataset_id = row.dataset_id
+                table_id = row.table_id
+                column_name = row.column_name
+
+                if dataset_id != current_dataset:
+                    current_dataset = dataset_id
+                    current_table = None
+                    datasets[row.dataset_id] = CatalogItem(
+                        qualified_identifier=f"`{project}`.`{dataset_id}`",
+                        query_name=f"`{dataset_id}`",
+                        label=dataset_id,
+                        type_label="ds",
+                        children=[],
+                    )
+
+                    project_item.children.append(datasets[dataset_id])
+
+                if table_id and table_id != current_table:
+                    current_table = table_id
+                    table_catalog_item = CatalogItem(
+                        qualified_identifier=f"`{project}`.`{dataset_id}`.`{table_id}`",
+                        query_name=f"`{table_id}`",
+                        label=table_id,
+                        type_label=self.TABLE_TYPE_MAPPING[row.table_type],
+                        children=[],
+                    )
+                    datasets[dataset_id].children.append(table_catalog_item)
+
+                if column_name:
+                    # remove anything in <> or () from the column_type
+                    column_type_cleaned = re.sub(r"[<(].*[>)]", "", row.column_type)
+                    column_type_label = COLUMN_TYPE_MAPPING[
+                        StandardSqlTypeNames(column_type_cleaned)
+                    ]
+                    column_catalog_item = CatalogItem(
+                        qualified_identifier=f"`{project}`.`{row.dataset_id}`.`{row.table_id}`.`{row.column_name}`",
+                        query_name=f"`{row.column_name}`",
+                        label=row.column_name,
+                        type_label=column_type_label,
+                    )
+                    # Relies on order being sorted
+                    datasets[dataset_id].children[-1].children.append(
+                        column_catalog_item
+                    )
+
+            project_items.append(project_item)
+
+        # Preserve backwards compatibility for single-project usage by retaining the
+        # existing dataset → table → column catalog hierarchy.
+        if len(projects) == 1:
+            return Catalog(items=project_items[0].children)
+
+        return Catalog(items=project_items)
 
     def get_completions(self) -> list[HarlequinCompletion]:
         type_completions = [
@@ -259,11 +292,20 @@ class BigQueryAdapter(HarlequinAdapter):
     ADAPTER_OPTIONS = BIGQUERY_ADAPTER_OPTIONS  # type: ignore
 
     def __init__(
-        self, project: str | None = None, location: str | None = None, **_: Any
+        self,
+        project: str | None = None,
+        location: str | None = None,
+        catalog_project: tuple[str, ...] = (),
+        **_: Any,
     ) -> None:
         self.project = project
         self.location = location
+        self.catalog_projects = catalog_project
 
     def connect(self) -> BigQueryConnection:
-        conn = BigQueryConnection(project=self.project, location=self.location)
+        conn = BigQueryConnection(
+            project=self.project,
+            location=self.location,
+            catalog_projects=self.catalog_projects,
+        )
         return conn

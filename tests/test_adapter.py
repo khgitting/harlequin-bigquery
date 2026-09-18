@@ -77,6 +77,78 @@ def test_get_catalog_with_parameterized_types(
     assert True
 
 
+def test_get_catalog_with_multiple_projects():
+    connection = BigQueryConnection.__new__(BigQueryConnection)
+    connection.location = "US"
+    connection.catalog_projects = ("project-b",)
+
+    connection.client = MagicMock()
+    connection.client.project = "project-a"
+
+    project_a_rows = [
+        MagicMock(
+            dataset_id="shared_dataset",
+            table_id="shared_table",
+            table_type="BASE TABLE",
+            column_name="column_a",
+            column_type="STRING",
+        ),
+    ]
+    project_b_rows = [
+        MagicMock(
+            dataset_id="shared_dataset",
+            table_id="shared_table",
+            table_type="BASE TABLE",
+            column_name="column_b",
+            column_type="STRING",
+        ),
+    ]
+
+    cursor_a = MagicMock()
+    cursor_a.cursor.fetchall.return_value = project_a_rows
+
+    cursor_b = MagicMock()
+    cursor_b.cursor.fetchall.return_value = project_b_rows
+
+    connection.execute = MagicMock(side_effect=[cursor_a, cursor_b])
+
+    catalog = connection.get_catalog()
+
+    assert len(catalog.items) == 2
+
+    project_a = catalog.items[0]
+    assert project_a.label == "project-a"
+    assert project_a.qualified_identifier == "`project-a`"
+    assert len(project_a.children) == 1
+
+    dataset_a = project_a.children[0]
+    assert dataset_a.label == "shared_dataset"
+    assert dataset_a.qualified_identifier == "`project-a`.`shared_dataset`"
+
+    table_a = dataset_a.children[0]
+    assert table_a.label == "shared_table"
+    assert table_a.qualified_identifier == (
+        "`project-a`.`shared_dataset`.`shared_table`"
+    )
+    assert table_a.children[0].label == "column_a"
+
+    project_b = catalog.items[1]
+    assert project_b.label == "project-b"
+    assert project_b.qualified_identifier == "`project-b`"
+    assert len(project_b.children) == 1
+
+    dataset_b = project_b.children[0]
+    assert dataset_b.label == "shared_dataset"
+    assert dataset_b.qualified_identifier == "`project-b`.`shared_dataset`"
+
+    table_b = dataset_b.children[0]
+    assert table_b.label == "shared_table"
+    assert table_b.qualified_identifier == (
+        "`project-b`.`shared_dataset`.`shared_table`"
+    )
+    assert table_b.children[0].label == "column_b"
+
+
 def test_execute_select(connection: BigQueryConnection) -> None:
     cur = connection.execute("select 1 as a")
     assert isinstance(cur, HarlequinCursor)
@@ -195,6 +267,7 @@ def test_delete_from_temp_table(connection: BigQueryConnection):
 def test_get_catalog_resets_current_table_between_datasets():
     connection = BigQueryConnection.__new__(BigQueryConnection)
     connection.location = "US"
+    connection.catalog_projects = ()
 
     connection.client = MagicMock()
     connection.client.project = "test-project"
@@ -242,6 +315,7 @@ def test_get_catalog_resets_current_table_between_datasets():
 def test_get_catalog_handles_range_column_type():
     connection = BigQueryConnection.__new__(BigQueryConnection)
     connection.location = "US"
+    connection.catalog_projects = ()
 
     connection.client = MagicMock()
     connection.client.project = "test-project"

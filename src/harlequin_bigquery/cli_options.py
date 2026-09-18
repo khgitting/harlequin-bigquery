@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from harlequin.options import TextOption
+from harlequin.options import ListOption, TextOption
 
 
 def is_valid_project(project: str | None) -> tuple[bool, str | None]:
@@ -43,4 +43,9 @@ location = TextOption(
     short_decls=["-l"],
 )
 
-BIGQUERY_ADAPTER_OPTIONS = [project, location]
+catalog_project = ListOption(
+    name="catalog-project",
+    description="Additional project IDs to include in the catalog",
+)
+
+BIGQUERY_ADAPTER_OPTIONS = [project, location, catalog_project]
